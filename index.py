@@ -1,25 +1,40 @@
 import hashlib
 import time
 import json
+import os
+import pickle
+from collections import defaultdict
 
 class Transaction:
-    def __init__(self, sender, recipient, amount):
+    def __init__(self, sender, recipient, amount, signature=None):
         self.sender = sender
         self.recipient = recipient
         self.amount = amount
         self.timestamp = time.time()
+        self.signature = signature  # digital signature for authentication
 
     def to_dict(self):
-        return {"sender": self.sender, "recipient": self.recipient, "amount": self.amount, "timestamp": self.timestamp}
+        return {
+            "sender": self.sender,
+            "recipient": self.recipient,
+            "amount": self.amount,
+            "timestamp": self.timestamp,
+            "signature": self.signature,
+        }
+
+    def sign_transaction(self, private_key):
+        # simulating signing with private key (stub for cryptography library)
+        self.signature = hashlib.sha256((self.sender + self.recipient + str(self.amount)).encode()).hexdigest()
 
 class Block:
-    def __init__(self, index, timestamp, transactions, previous_hash):
+    def __init__(self, index, timestamp, transactions, previous_hash, miner_address):
         self.index = index
         self.timestamp = timestamp
         self.transactions = transactions
         self.previous_hash = previous_hash
         self.nonce = 0
         self.hash = self.calculate_hash()
+        self.miner_address = miner_address  # miner on the block
 
     def calculate_hash(self):
         transactions_str = json.dumps([t.to_dict() for t in self.transactions], sort_keys=True)
@@ -34,14 +49,17 @@ class Block:
 
 class Blockchain:
     def __init__(self):
-        self.chain = [self.create_genesis_block()]
+        self.chain = self.load_chain()
+        if not self.chain:
+            self.chain = [self.create_genesis_block()]
         self.difficulty = 4
         self.pending_transactions = []
         self.transaction_pool_limit = 10
-        self.balances = {}  # Dictionary to store account balances
+        self.balances = defaultdict(int) 
+        self.mining_reward = 50  # reward for mining a block is (50 of the current)
 
     def create_genesis_block(self):
-        return Block(0, time.time(), [], "0")
+        return Block(0, time.time(), [], "0", "GenesisMiner")
 
     def get_latest_block(self):
         return self.chain[-1]
@@ -50,6 +68,7 @@ class Blockchain:
         new_block.previous_hash = self.get_latest_block().hash
         new_block.mine_block(self.difficulty)
         self.chain.append(new_block)
+        self.save_chain()
 
     def is_chain_valid(self):
         for i in range(1, len(self.chain)):
@@ -67,53 +86,63 @@ class Blockchain:
         return True
 
     def add_transaction(self, transaction):
-        # Check if the sender has enough balance before adding the transaction
         sender_balance = self.get_balance(transaction.sender)
-        if sender_balance >= transaction.amount:
-            self.pending_transactions.append(transaction)
-        else:
+        if sender_balance < transaction.amount:
             print(f"Transaction from {transaction.sender} failed: Insufficient balance.")
-            return
+            return False
 
-        if len(self.pending_transactions) >= self.transaction_pool_limit:
-            self.mine_pending_transactions()
+        # insurin for no duplicates
+        for t in self.pending_transactions:
+            if t.to_dict() == transaction.to_dict():
+                print(f"Transaction {transaction} is already in the pool.")
+                return False
 
-    def mine_pending_transactions(self):
+        self.pending_transactions.append(transaction)
+        print(f"Transaction from {transaction.sender} to {transaction.recipient} added to pool.")
+        return True
+
+    def mine_pending_transactions(self, miner_address):
         if not self.pending_transactions:
             print("No transactions to mine.")
             return
 
+        # mining reward implimatation added here
+        reward_transaction = Transaction("Network", miner_address, self.mining_reward)
+        self.pending_transactions.append(reward_transaction)
+
         new_block = Block(
-            len(self.chain), 
+            len(self.chain),
             time.time(),
             self.pending_transactions,
-            self.get_latest_block().hash
+            self.get_latest_block().hash,
+            miner_address,
         )
 
         print(f"Mining block {new_block.index}...")
         self.add_block(new_block)
 
-        # Update balances after mining the block
+        # assigningnew reward in balance after mining the block
         self.update_balances(new_block)
-
         self.pending_transactions = []
 
     def update_balances(self, block):
-        # Update balances for each transaction in the block
         for transaction in block.transactions:
-            if transaction.sender in self.balances:
+            if transaction.sender != "Network":
                 self.balances[transaction.sender] -= transaction.amount
-            else:
-                self.balances[transaction.sender] = -transaction.amount
-
-            if transaction.recipient in self.balances:
-                self.balances[transaction.recipient] += transaction.amount
-            else:
-                self.balances[transaction.recipient] = transaction.amount
+            self.balances[transaction.recipient] += transaction.amount
 
     def get_balance(self, address):
-        # Return the balance for a given address (default to 0 if no balance exists)
-        return self.balances.get(address, 0)
+        return self.balances[address]
+
+    def save_chain(self):
+        with open("blockchain_data.pkl", "wb") as file:
+            pickle.dump(self.chain, file)
+
+    def load_chain(self):
+        if os.path.exists("blockchain_data.pkl"):
+            with open("blockchain_data.pkl", "rb") as file:
+                return pickle.load(file)
+        return None
 
     def display_blockchain(self):
         for block in self.chain:
@@ -122,44 +151,34 @@ class Blockchain:
             print(f"  Transactions: {len(block.transactions)}")
             print(f"  Previous Hash: {block.previous_hash}")
             print(f"  Hash: {block.hash}")
-            print(f"  Nonce: {block.nonce}\n")
+            print(f"  Nonce: {block.nonce}")
+            print(f"  Mined by: {block.miner_address}\n")
 
 def main():
     blockchain = Blockchain()
 
-    # Add initial balances
     blockchain.balances["Alice"] = 1000
     blockchain.balances["Bob"] = 500
     blockchain.balances["Charlie"] = 300
-    blockchain.balances["David"] = 200
+    blockchain.balances["Miner"] = 0
 
     print("Initial Balances:")
-    print(f"Alice: {blockchain.get_balance('Alice')}")
-    print(f"Bob: {blockchain.get_balance('Bob')}")
-    print(f"Charlie: {blockchain.get_balance('Charlie')}")
-    print(f"David: {blockchain.get_balance('David')}\n")
+    for user in blockchain.balances:
+        print(f"{user}: {blockchain.get_balance(user)}")
+    print()
 
-    # Create and add some transactions
-    blockchain.add_transaction(Transaction("Alice", "Bob", 50))
-    blockchain.add_transaction(Transaction("Bob", "Charlie", 30))
-    blockchain.add_transaction(Transaction("Charlie", "David", 20))
-    blockchain.mine_pending_transactions()
+    blockchain.add_transaction(Transaction("Alice", "Bob", 100))
+    blockchain.add_transaction(Transaction("Bob", "Charlie", 50))
+    blockchain.mine_pending_transactions("Miner")
 
-    # Add more transactions
-    blockchain.add_transaction(Transaction("Alice", "Charlie", 100))
-    blockchain.add_transaction(Transaction("Bob", "David", 10))
-    blockchain.mine_pending_transactions()
+    blockchain.add_transaction(Transaction("Alice", "Charlie", 200))
+    blockchain.mine_pending_transactions("Miner")
 
     blockchain.display_blockchain()
 
-    # Check if the blockchain is valid
-    print("Blockchain is valid:", blockchain.is_chain_valid())
-
-    # Check balances after transactions
-    print(f"Alice's balance: {blockchain.get_balance('Alice')}")
-    print(f"Bob's balance: {blockchain.get_balance('Bob')}")
-    print(f"Charlie’s balance: {blockchain.get_balance('Charlie')}")
-    print(f"David’s balance: {blockchain.get_balance('David')}\n")
+    print("Final Balances:")
+    for user in blockchain.balances:
+        print(f"{user}: {blockchain.get_balance(user)}")
 
 if __name__ == "__main__":
     main()
